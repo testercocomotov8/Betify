@@ -1,0 +1,39 @@
+{
+  "name": "betify",
+  "version": "1.0.0",
+  "description": "Betify - Real-time Multi-Sport Platform by SGYT Corp.",
+  "main": "server.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "node server.js",
+    "client": "next dev",
+    "build": "next build",
+    "start": "NODE_ENV=production node server.js",
+    "db:init": "node scripts/init-db.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.14.2",
+    "redis": "^4.6.10",
+    "pg": "^8.11.3",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.1.5",
+    "compression": "^1.7.4",
+    "uuid": "^9.0.1",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "dotenv": "^16.3.1",
+    "next": "^14.0.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "lucide-react": "^0.294.0",
+    "clsx": "^2.0.0",
+    "concurrently": "^8.2.2"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.3.6"
+  }
+}

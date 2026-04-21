@@ -131,6 +131,68 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Withdrawal password table
+CREATE TABLE IF NOT EXISTS withdrawal_passwords (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID UNIQUE REFERENCES users(id),
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Bank accounts table
+CREATE TABLE IF NOT EXISTS bank_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  account_holder_name VARCHAR(100) NOT NULL,
+  account_number VARCHAR(50) NOT NULL,
+  ifsc_code VARCHAR(20) NOT NULL,
+  bank_name VARCHAR(100) NOT NULL,
+  is_verified BOOLEAN DEFAULT false,
+  is_primary BOOLEAN DEFAULT false,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Withdrawal requests table
+CREATE TABLE IF NOT EXISTS withdrawal_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  bank_account_id UUID REFERENCES bank_accounts(id),
+  amount DECIMAL(15, 2) NOT NULL,
+  status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+  locked_amount DECIMAL(15, 2) DEFAULT 0,
+  processed_by UUID REFERENCES users(id),
+  processed_at TIMESTAMP,
+  rejection_reason TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Deposit requests table
+CREATE TABLE IF NOT EXISTS deposit_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  amount DECIMAL(15, 2) NOT NULL,
+  method VARCHAR(50) NOT NULL,
+  transaction_id VARCHAR(100),
+  status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+  processed_by UUID REFERENCES users(id),
+  processed_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- User settings table
+CREATE TABLE IF NOT EXISTS user_settings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID UNIQUE REFERENCES users(id),
+  bet_notifications BOOLEAN DEFAULT true,
+  match_notifications BOOLEAN DEFAULT true,
+  marketing_emails BOOLEAN DEFAULT false,
+  preferred_currency VARCHAR(10) DEFAULT 'INR',
+  timezone VARCHAR(50) DEFAULT 'Asia/Kolkata',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger(user_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger(created_at);
@@ -143,6 +205,13 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_security_logs_created_at ON security_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_withdrawal_passwords_user_id ON withdrawal_passwords(user_id);
+CREATE INDEX IF NOT EXISTS idx_bank_accounts_user_id ON bank_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_withdrawal_requests_user_id ON withdrawal_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_withdrawal_requests_status ON withdrawal_requests(status);
+CREATE INDEX IF NOT EXISTS idx_deposit_requests_user_id ON deposit_requests(user_id);
+CREATE INDEX IF NOT EXISTS idx_deposit_requests_status ON deposit_requests(status);
+CREATE INDEX IF NOT EXISTS idx_user_settings_user_id ON user_settings(user_id);
 `;
 
 async function initDatabase() {

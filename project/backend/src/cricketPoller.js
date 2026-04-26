@@ -1,6 +1,5 @@
-// Cricket Poller - ESPN API polling for live cricket scores
+// Cricket Poller - ESPN API polling engine
 import fetch from 'node-fetch';
-import { oddsEngine } from './oddsEngine.js';
 
 const POLL_INTERVAL_MS = 3500;
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports/cricket';
@@ -10,27 +9,24 @@ const ESPN_HEADERS = {
   'Referer': 'https://www.espncricinfo.com/'
 };
 
-const BALL_TYPE_MAP = {
-  'four': 'four',
-  'six': 'six',
-  'wicket': 'wicket',
-  'wide': 'wide',
-  'no ball': 'noball'
-};
-
-class CricketPoller {
+export class CricketPoller {
   constructor() {
     this.pollers = new Map();
     this.io = null;
-    this.db = null;
+    this.database = null;
+    this.oddsEngine = null;
   }
 
   setIO(io) {
     this.io = io;
   }
 
-  setDB(database) {
-    this.db = database;
+  setDatabase(db) {
+    this.database = db;
+  }
+
+  setOddsEngine(engine) {
+    this.oddsEngine = engine;
   }
 
   startMatch(matchId, leagueSlug = 'ipl') {
@@ -58,37 +54,38 @@ class CricketPoller {
 
   async tick(matchId) {
     const p = this.pollers.get(matchId);
-    if (!p || !this.io) return;
+    if (!p) return;
 
     try {
       const raw = await this.fetchESPN(matchId, p.leagueSlug);
       const parsed = this.parseESPN(raw, matchId);
       if (!parsed) return;
 
-      // Only broadcast when a new ball has been bowled
       const isNewBall = parsed.lastBallId !== p.lastBallId;
       if (!isNewBall && p.lastBallId !== null) return;
 
       p.lastBallId = parsed.lastBallId;
       p.failCount = 0;
 
-      // Recalculate odds based on new match state
-      const newOdds = oddsEngine.recalculate(parsed.matchState, parsed.lastBallEvent);
+      // Recalculate odds
+      const newOdds = this.oddsEngine.recalculate(parsed.matchState, parsed.lastBallEvent);
 
       // Persist to database
       await this.syncToDatabase(matchId, parsed, newOdds);
 
-      // Broadcast to all clients watching this match
-      this.io.to(`match:${matchId}`).emit('score_update', {
-        matchId,
-        display: parsed.display,
-        odds: newOdds,
-        event: parsed.lastBallEvent,
-        isWicket: parsed.lastBallEvent === 'wicket',
-        isSix: parsed.lastBallEvent === 'six',
-        isFour: parsed.lastBallEvent === 'four',
-        timestamp: Date.now()
-      });
+      // Broadcast to all clients
+      if (this.io) {
+        this.io.to(`match:${matchId}`).emit('score_update', {
+          matchId,
+          display: parsed.display,
+          odds: newOdds,
+          event: parsed.lastBallEvent,
+          isWicket: parsed.lastBallEvent === 'wicket',
+          isSix: parsed.lastBallEvent === 'six',
+          isFour: parsed.lastBallEvent === 'four',
+          timestamp: Date.now()
+        });
+      }
 
       p.lastState = parsed;
     } catch (err) {
@@ -97,14 +94,16 @@ class CricketPoller {
 
       if (p.failCount >= 6) {
         console.error(`[Poller ${matchId}] All score APIs down. Suspending markets.`);
-        if (this.db) {
-          await this.db.suspendMarkets(matchId);
+        if (this.database) {
+          this.database.suspendMatchMarkets(matchId);
         }
-        this.io.to(`match:${matchId}`).emit('score_unavailable', {
-          matchId,
-          reason: 'Score feed temporarily unavailable. Markets suspended.',
-          timestamp: Date.now()
-        });
+        if (this.io) {
+          this.io.to(`match:${matchId}`).emit('score_unavailable', {
+            matchId,
+            reason: 'Score feed temporarily unavailable. Markets suspended.',
+            timestamp: Date.now()
+          });
+        }
       }
     }
   }
@@ -123,7 +122,7 @@ class CricketPoller {
     try {
       const comp = raw?.header?.competitions?.[0];
       const situation = raw?.situation ?? {};
-      const commentary = (raw?.commentary?.items ?? []);
+      const commentary = raw?.commentary?.items ?? [];
       const boxscore = raw?.boxscore;
 
       if (!comp) return null;
@@ -135,10 +134,9 @@ class CricketPoller {
         id: c.team?.id
       }));
 
-      // Last ball (commentary newest first)
       const lastBall = commentary[0] ?? null;
       const lastBallId = lastBall?.id ?? null;
-      const lastBallEvent = BALL_TYPE_MAP[lastBall?.type?.id] ?? 'run';
+      const lastBallEvent = this.mapBallType(lastBall?.type?.id);
       const lastBallRuns = lastBall?.scoreValue ?? 0;
       const lastBallText = lastBall?.text ?? '';
 
@@ -179,12 +177,11 @@ class CricketPoller {
         economy: Number(bowlerRaw.stats?.[3] ?? 0)
       } : null;
 
-      // Match state for odds engine
+      // Match state
       const overStr = situation.currentOver ?? '0.0';
       const overNum = parseFloat(overStr);
       const ballsBowled = Math.floor(overNum) * 6 + Math.round((overNum % 1) * 10);
 
-      // Parse score string
       const scoreStr = teams[0]?.score ?? '0';
       const scoreMatch = scoreStr.match(/(\d+)(?:\/(\d+))?/);
       const battingScore = parseInt(scoreMatch?.[1] ?? '0');
@@ -230,11 +227,22 @@ class CricketPoller {
     }
   }
 
+  mapBallType(typeId) {
+    const map = {
+      'four': 'four',
+      'six': 'six',
+      'wicket': 'wicket',
+      'wide': 'wide',
+      'no ball': 'noball'
+    };
+    return map[typeId] ?? 'run';
+  }
+
   async syncToDatabase(matchId, parsed, odds) {
-    if (!this.db) return;
+    if (!this.database) return;
 
     // Update match scores
-    await this.db.updateMatch(matchId, {
+    this.database.updateMatch(matchId, {
       team1_score: parsed.display.teams?.[0]?.score,
       team2_score: parsed.display.teams?.[1]?.score,
       status: parsed.display.statusText,
@@ -244,7 +252,28 @@ class CricketPoller {
 
     // Update selections odds
     if (odds?.team1 && odds?.team2) {
-      await this.db.updateSelections(matchId, odds, parsed.lastBallEvent);
+      const market = this.database.getMatchMarket(matchId, 'match_odds');
+      if (market) {
+        const selections = this.database.getSelectionsByMarket(market.id);
+        for (const sel of selections) {
+          const teamOdds = sel.name === parsed.display.teams?.[0]?.name ? odds.team1 : odds.team2;
+          this.database.updateSelection(sel.id, {
+            prev_back_odds: sel.back_odds,
+            prev_lay_odds: sel.lay_odds,
+            back_odds: teamOdds.back,
+            lay_odds: teamOdds.lay,
+            odds_moved: teamOdds.back > sel.back_odds ? 'up' : teamOdds.back < sel.back_odds ? 'down' : null
+          });
+
+          // Log to odds history
+          this.database.insertOddsLog({
+            selection_id: sel.id,
+            back_odds: teamOdds.back,
+            lay_odds: teamOdds.lay,
+            trigger: parsed.lastBallEvent
+          });
+        }
+      }
     }
   }
 }

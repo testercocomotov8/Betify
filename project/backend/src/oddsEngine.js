@@ -1,8 +1,14 @@
 // Odds Engine - T20 Win Probability Model
-// Calculates Back/Lay odds based on match state
+export class OddsEngine {
+  constructor() {
+    this.database = null;
+  }
 
-class OddsEngine {
-  // Convert probability to exchange odds
+  setDatabase(db) {
+    this.database = db;
+  }
+
+  // Probability to exchange odds
   probToOdds(p) {
     if (p <= 0.01) return 99.0;
     if (p >= 0.99) return 1.01;
@@ -20,7 +26,7 @@ class OddsEngine {
   }
 
   makeOdds(prob) {
-    // 3.5% margin for exchange
+    // 3.5% margin
     const adjProb = prob * (1 - 0.035);
     const mid = this.probToOdds(adjProb);
     const s = this.spread(mid);
@@ -31,10 +37,9 @@ class OddsEngine {
     };
   }
 
-  // T20 chase win probability using resource model
+  // T20 chase win probability
   chaseWinProb(state) {
     if (!state.target) return 0.5;
-    
     const runsNeeded = state.target - state.battingScore;
     const ballsRemaining = 120 - state.ballsBowled;
     const wktsRemaining = 10 - state.wickets;
@@ -75,12 +80,10 @@ class OddsEngine {
   }
 
   // Main recalculate after each ball
-  recalculate(state, ballEvent = 'run') {
+  recalculate(state, ballEvent) {
     const battingProb = state.innings === 2 ? this.chaseWinProb(state) : this.firstInningsProb(state);
     const bowlingProb = 1 - battingProb;
 
-    // In innings 1: team1 batting, team2 bowling
-    // In innings 2: team2 batting (chasing), team1 bowling
     const team1Prob = state.innings === 1 ? battingProb : bowlingProb;
     const team2Prob = state.innings === 1 ? bowlingProb : battingProb;
 
@@ -96,20 +99,6 @@ class OddsEngine {
       team1: parseFloat((exchangeOdds.team1.back * 0.95).toFixed(2)),
       team2: parseFloat((exchangeOdds.team2.back * 0.95).toFixed(2))
     };
-  }
-
-  // Fancy market lines
-  fancyLine(type, state) {
-    const rr = state.runRate || 6;
-    if (type === 'next_over_runs') {
-      const expected = Math.round(rr * 0.9);
-      return { yes: expected + 1, no: expected + 1 };
-    }
-    if (type === 'total_sixes') {
-      const projected = Math.round((state.ballsBowled > 0 ? (state.battingScore / state.ballsBowled) * 120 : 160) / 20);
-      return { yes: projected + 1, no: projected + 1 };
-    }
-    return null;
   }
 }
 

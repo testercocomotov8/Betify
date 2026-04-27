@@ -3,110 +3,87 @@ import { Link } from 'react-router-dom';
 import Header from '../components/Header';
 import BottomNav from '../components/BottomNav';
 import MatchCard from '../components/MatchCard';
-
-const SPORTS = [
-  { id: 'cricket', name: 'Cricket', icon: '🏏' },
-  { id: 'football', name: 'Football', icon: '⚽' },
-  { id: 'tennis', name: 'Tennis', icon: '🎾' },
-];
-
-const FILTERS = ['All', 'Live', 'Upcoming'];
+import socketService from '../lib/socket';
 
 export default function Home() {
-  const [activeSport, setActiveSport] = useState('cricket');
-  const [activeFilter, setActiveFilter] = useState('All');
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all'); // all, live, upcoming
 
+  // Fetch initial matches
   useEffect(() => {
-    // Demo matches for cricket
-    const demoMatches = [
-      {
-        id: '1',
-        team1Name: 'Mumbai Indians',
-        team2Name: 'Chennai Super Kings',
-        team1Score: '186/4 (18.2)',
-        team2Score: '-',
-        status: 'live',
-        startTime: 'LIVE',
-        markets: [
-          { name: 'Match Odds', back1: '1.95', lay1: '1.98' },
-          { name: 'Bookmaker', back1: '1.90', lay1: '-' },
-        ],
-      },
-      {
-        id: '2',
-        team1Name: 'Royal Challengers Bangalore',
-        team2Name: 'Kolkata Knight Riders',
-        team1Score: '0/0 (0.0)',
-        team2Score: '-',
-        status: 'upcoming',
-        startTime: '7:30 PM',
-        markets: [
-          { name: 'Match Odds', back1: '2.10', lay1: '2.14' },
-        ],
-      },
-      {
-        id: '3',
-        team1Name: 'Delhi Capitals',
-        team2Name: 'Punjab Kings',
-        team1Score: '145/3 (15.0)',
-        team2Score: '-',
-        status: 'live',
-        startTime: 'LIVE',
-        markets: [
-          { name: 'Match Odds', back1: '1.65', lay1: '1.68' },
-        ],
-      },
-    ];
-    setMatches(demoMatches);
-    setLoading(false);
+    const fetchMatches = async () => {
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/matches`);
+        const data = await res.json();
+        setMatches(data);
+        setLoading(false);
+      } catch (err) {
+        console.error('Failed to fetch matches:', err);
+        setLoading(false);
+      }
+    };
+    fetchMatches();
   }, []);
 
-  const filteredMatches = matches.filter((m) => {
-    if (activeFilter === 'Live') return m.status === 'live';
-    if (activeFilter === 'Upcoming') return m.status === 'upcoming';
+  // WebSocket subscription for live updates
+  useEffect(() => {
+    socketService.connect();
+
+    const unsubScore = socketService.on('score:update', (data) => {
+      setMatches(prev => prev.map(match => 
+        match.id === data.matchId ? { ...match, ...data } : match
+      ));
+    });
+
+    const unsubBall = socketService.on('ball:event', (data) => {
+      setMatches(prev => prev.map(match =>
+        match.id === data.matchId ? { ...match, lastBall: data.runs_scored, ballState: data.ball_state } : match
+      ));
+    });
+
+    return () => {
+      unsubScore();
+      unsubBall();
+    };
+  }, []);
+
+  const filteredMatches = matches.filter(match => {
+    if (filter === 'live') return match.status === 'live';
+    if (filter === 'upcoming') return match.status === 'upcoming';
     return true;
   });
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-teal-600 font-medium">Loading matches...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-100 pb-20">
       <Header />
-      
-      {/* Sport Tabs */}
-      <div className="sticky top-16 z-40 bg-white border-b border-gray-200">
-        <div className="flex overflow-x-auto scrollbar-hide px-4 py-3 gap-3">
-          {SPORTS.map((sport) => (
-            <button
-              key={sport.id}
-              onClick={() => setActiveSport(sport.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full whitespace-nowrap transition-all ${
-                activeSport === sport.id
-                  ? 'bg-teal-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              <span>{sport.icon}</span>
-              <span className="font-medium">{sport.name}</span>
-            </button>
-          ))}
-        </div>
-      </div>
 
-      {/* Filter Pills */}
-      <div className="bg-white px-4 py-2">
-        <div className="flex gap-2">
-          {FILTERS.map((filter) => (
+      {/* Filter Tabs */}
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div className="flex">
+          {[
+            { key: 'all', label: 'All' },
+            { key: 'live', label: 'Live' },
+            { key: 'upcoming', label: 'Upcoming' },
+          ].map(tab => (
             <button
-              key={filter}
-              onClick={() => setActiveFilter(filter)}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${
-                activeFilter === filter
-                  ? 'bg-teal-100 text-teal-700 border border-teal-300'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              key={tab.key}
+              onClick={() => setFilter(tab.key)}
+              className={`flex-1 py-3 text-center font-medium ${
+                filter === tab.key
+                  ? 'text-teal-600 border-b-2 border-teal-600'
+                  : 'text-gray-500'
               }`}
             >
-              {filter}
+              {tab.label}
             </button>
           ))}
         </div>
@@ -114,17 +91,12 @@ export default function Home() {
 
       {/* Match List */}
       <div className="p-4 space-y-4">
-        {loading ? (
-          <div className="flex justify-center py-10">
-            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-teal-600"></div>
-          </div>
-        ) : filteredMatches.length === 0 ? (
-          <div className="text-center py-10 text-gray-500">
-            <p className="text-lg">No matches found</p>
-            <p className="text-sm mt-1">Check back later for upcoming matches</p>
+        {filteredMatches.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">
+            No matches found
           </div>
         ) : (
-          filteredMatches.map((match) => (
+          filteredMatches.map(match => (
             <Link key={match.id} to={`/match/${match.id}`}>
               <MatchCard match={match} />
             </Link>

@@ -1,110 +1,168 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import Header from '../components/Header';
 import BottomNav from '../components/BottomNav';
 import BetSlip from '../components/BetSlip';
-import OddsCell from '../components/OddsCell';
 import MarketSection from '../components/MarketSection';
 import LiveScorePanel from '../components/LiveScorePanel';
+import socketService from '../lib/socket';
 
 export default function Match() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [match, setMatch] = useState(null);
-  const [markets, setMarkets] = useState([]);
+  const [odds, setOdds] = useState(null);
+  const [marketStatus, setMarketStatus] = useState({ bookmaker: 'open', session: 'open' });
   const [activeTab, setActiveTab] = useState('odds');
   const [showBetSlip, setShowBetSlip] = useState(false);
   const [selectedBet, setSelectedBet] = useState(null);
+  const [loading, setLoading] = useState(true);
 
+  // Fetch initial match data
   useEffect(() => {
-    // Demo match data
-    const demoMatch = {
-      id: id || '1',
-      team1Name: 'Mumbai Indians',
-      team2Name: 'Chennai Super Kings',
-      team1Score: '186/4',
-      team2Score: '-',
-      status: 'live',
-      over: '18.2',
-      runRate: '10.18',
-      requiredRate: '8.50',
-      target: '210',
-      batsmen: [
-        { name: 'Rohit Sharma', runs: 45, balls: 32, fours: 5, sixes: 2, sr: 140.6, onStrike: true },
-        { name: 'Suryakumar', runs: 23, balls: 18, fours: 2, sixes: 1, sr: 127.8, onStrike: false },
-      ],
-      bowler: { name: 'Ravindra Jadeja', overs: '3.2', runs: 28, wickets: 1, economy: 8.4 },
-      lastBall: '4',
-      overBalls: ['.', '.', '4', '.', '6', '.'],
-      lastCommentary: 'FOUR! Superb drive through covers!',
+    const fetchMatch = async () => {
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3001'}/api/match/${id}`);
+        if (!res.ok) throw new Error('Match not found');
+        const data = await res.json();
+        setMatch(data);
+        if (data.odds) setOdds(data.odds);
+        setLoading(false);
+      } catch (err) {
+        console.error('Failed to fetch match:', err);
+        navigate('/');
+      }
     };
+    fetchMatch();
+  }, [id, navigate]);
 
-    const demoMarkets = [
-      {
-        id: 'm1',
-        name: 'Match Odds',
-        type: 'match_odds',
-        status: 'open',
-        selections: [
-          { id: 's1', name: 'Mumbai Indians', back: 1.95, lay: 1.98 },
-          { id: 's2', name: 'Chennai Super Kings', back: 2.10, lay: 2.14 },
-          { id: 's3', name: 'The Draw', back: 15.0, lay: 20.0 },
-        ],
-      },
-      {
-        id: 'm2',
-        name: 'Bookmaker',
-        type: 'bookmaker',
-        status: 'open',
-        selections: [
-          { id: 's4', name: 'Mumbai Indians', back: 1.90, lay: null },
-          { id: 's5', name: 'Chennai Super Kings', back: 2.05, lay: null },
-        ],
-      },
-      {
-        id: 'm3',
-        name: 'First 6 Over Runs',
-        type: 'fancy',
-        status: 'open',
-        selections: [
-          { id: 's6', name: 'Over 52.5', back: 1.85, lay: 1.90 },
-          { id: 's7', name: 'Under 52.5', back: 2.00, lay: 2.05 },
-        ],
-      },
-    ];
+  // WebSocket subscriptions
+  useEffect(() => {
+    if (!id) return;
 
-    setMatch(demoMatch);
-    setMarkets(demoMarkets);
+    // Connect and subscribe to match
+    socketService.connect();
+    socketService.subscribeMatch(id);
+
+    // Handle score updates
+    const unsubScore = socketService.on('score:update', (data) => {
+      if (data.matchId === id) {
+        setMatch(prev => prev ? { ...prev, ...data } : prev);
+      }
+    });
+
+    // Handle ball events
+    const unsubBall = socketService.on('ball:event', (data) => {
+      if (data.matchId === id) {
+        setMatch(prev => prev ? { ...prev, lastBall: data.runs_scored, ballState: data.ball_state } : prev);
+      }
+    });
+
+    // Handle odds updates
+    const unsubOdds = socketService.on('odds:update', (data) => {
+      if (data.matchId === id) {
+        setOdds(data.oddsData);
+      }
+    });
+
+    // Handle market status changes
+    const unsubMarket = socketService.on('market:status', (data) => {
+      if (data.matchId === id) {
+        setMarketStatus(prev => ({ ...prev, [data.marketType]: data.status }));
+      }
+    });
+
+    return () => {
+      unsubScore();
+      unsubBall();
+      unsubOdds();
+      unsubMarket();
+      socketService.unsubscribeMatch(id);
+    };
   }, [id]);
 
-  const handleOddsClick = (selection, marketType, betType) => {
+  const handleOddsClick = useCallback((selection, marketType, betType, oddsValue) => {
     setSelectedBet({
-      selectionId: selection.id,
+      selectionId: selection.id || selection.name,
       selectionName: selection.name,
       marketType,
       betType,
-      odds: betType === 'back' ? selection.back : selection.lay,
+      odds: oddsValue,
     });
     setShowBetSlip(true);
-  };
+  }, []);
 
-  const handlePlaceBet = (stake) => {
-    console.log('Placing bet:', { ...selectedBet, stake });
+  const handlePlaceBet = useCallback((stake) => {
     setShowBetSlip(false);
     setSelectedBet(null);
-  };
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="text-teal-600 font-medium">Loading match...</div>
+      </div>
+    );
+  }
 
   if (!match) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-teal-600"></div>
+        <div className="text-gray-600">Match not found</div>
       </div>
     );
+  }
+
+  // Build markets from odds data
+  const markets = [];
+
+  if (odds) {
+    // Match Odds Market
+    markets.push({
+      id: 'match_odds',
+      name: 'Match Odds',
+      type: 'match_odds',
+      status: 'open', // Never suspends
+      selections: [
+        { id: 'team1', name: match.team1 || 'Team 1', back: odds.matchOdds?.team1 || 0, lay: odds.matchOdds?.team1 ? odds.matchOdds.team1 + 0.02 : null },
+        { id: 'team2', name: match.team2 || 'Team 2', back: odds.matchOdds?.team2 || 0, lay: odds.matchOdds?.team2 ? odds.matchOdds.team2 + 0.02 : null },
+        { id: 'draw', name: 'The Draw', back: odds.matchOdds?.draw || 0, lay: odds.matchOdds?.draw ? odds.matchOdds.draw + 0.05 : null },
+      ],
+    });
+
+    // Bookmaker Market
+    if (odds.bookmakerOdds) {
+      markets.push({
+        id: 'bookmaker',
+        name: 'Bookmaker',
+        type: 'bookmaker',
+        status: marketStatus.bookmaker,
+        selections: [
+          { id: 'back1', name: match.team1 || 'Team 1', back: odds.bookmakerOdds.back1 || 0, lay: null },
+          { id: 'back2', name: match.team2 || 'Team 2', back: odds.bookmakerOdds.back2 || 0, lay: null },
+        ],
+      });
+    }
+
+    // Session Market
+    if (odds.sessionOdds) {
+      markets.push({
+        id: 'session',
+        name: 'Session',
+        type: 'session',
+        status: marketStatus.session,
+        selections: [
+          { id: 'over', name: `Over ${odds.sessionOdds.runLine || 50.5}`, back: odds.sessionOdds.over || 0, lay: null },
+          { id: 'under', name: `Under ${odds.sessionOdds.runLine || 50.5}`, back: odds.sessionOdds.under || 0, lay: null },
+        ],
+      });
+    }
   }
 
   return (
     <div className="min-h-screen bg-gray-100 pb-32">
       <Header />
-      
+
       {/* Back Button */}
       <div className="bg-white px-4 py-2 border-b border-gray-200">
         <Link to="/" className="flex items-center gap-2 text-teal-600 font-medium">
@@ -122,10 +180,10 @@ export default function Match() {
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`flex-1 py-3 text-center font-medium capitalize transition-all ${
+              className={`flex-1 py-3 text-center font-medium ${
                 activeTab === tab
                   ? 'text-teal-600 border-b-2 border-teal-600'
-                  : 'text-gray-500 hover:text-gray-700'
+                  : 'text-gray-500'
               }`}
             >
               {tab}
@@ -149,6 +207,7 @@ export default function Match() {
       {showBetSlip && selectedBet && (
         <BetSlip
           bet={selectedBet}
+          matchId={id}
           onClose={() => setShowBetSlip(false)}
           onPlaceBet={handlePlaceBet}
         />
